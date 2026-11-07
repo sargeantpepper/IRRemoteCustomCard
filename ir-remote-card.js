@@ -7,7 +7,7 @@
  * TrueNAS / Proxmox VE cards: badge header, status pill, tinted collapsible panels.
  * Includes a visual editor.
  */
-const CARD_VERSION = '1.1.0';
+const CARD_VERSION = '1.2.0';
 
 const SECTION_KEYS = ['power', 'volume', 'inputs', 'adjust', 'buttons'];
 const SECTION_TITLES = { power: 'Power', volume: 'Volume', inputs: 'Inputs', adjust: 'Tone', buttons: 'Extras' };
@@ -23,6 +23,7 @@ const OPTION_DEFAULTS = {
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ENTITY_CMD_RE = /^(button|input_button|script|scene)\.[a-z0-9_]+$/;
 const NUM_RE = /^(0x[0-9a-f]+|-?\d+)$/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -53,7 +54,10 @@ function splitOpts(cmd) {
 /** One command (string or object, no repeat keys) -> { domain, service, data } */
 function resolveCall(cmd, transport) {
   if (cmd == null || cmd === '') throw new Error('No command set');
+  const t = transport || {};
+  const type = (t.type || 'esphome').toLowerCase();
   if (typeof cmd === 'string') {
+    if (type === 'text' && !ENTITY_CMD_RE.test(cmd)) return resolveCall({ code: cmd }, transport);
     const domain = cmd.split('.')[0];
     if (domain === 'button' || domain === 'input_button') return { domain, service: 'press', data: { entity_id: cmd } };
     if (domain === 'script' || domain === 'scene') return { domain, service: 'turn_on', data: { entity_id: cmd } };
@@ -69,8 +73,12 @@ function resolveCall(cmd, transport) {
   }
   if (cmd.entity !== undefined) return resolveCall(cmd.entity, transport);
 
-  const t = transport || {};
-  const type = (t.type || 'esphome').toLowerCase();
+  if (type === 'text') {
+    if (!t.entity) throw new Error('Choose the text entity that sends IR codes (transport.entity)');
+    if (cmd.code === undefined || cmd.code === null || cmd.code === '') throw new Error('No code set for this button');
+    const domain = t.entity.split('.')[0] === 'input_text' ? 'input_text' : 'text';
+    return { domain, service: 'set_value', data: { entity_id: t.entity, value: `${t.prefix ?? ''}${cmd.code}${t.suffix ?? ''}` } };
+  }
   if (type === 'esphome') {
     if (cmd.raw !== undefined) {
       if (!t.raw_service) throw new Error('Set "ESPHome raw send action" (transport.raw_service) to send raw codes');
@@ -132,6 +140,11 @@ async function sendCommand(hass, cmd, config) {
       const call = resolveCall(base, config.transport);
       if (config.debug) console.info('[ir-remote-card]', call.domain, call.service, call.data);
       await hass.callService(call.domain, call.service, call.data);
+      const t = config.transport || {};
+      if (t.type === 'text' && call.service === 'set_value' && call.data.entity_id === t.entity && !isEmpty(t.reset_value)) {
+        await sleep(Number(t.reset_delay ?? 100));
+        await hass.callService(call.domain, 'set_value', { entity_id: t.entity, value: String(t.reset_value) });
+      }
     }
     if (i < times - 1) await sleep(Number(opts.gap ?? 100));
   }
@@ -191,8 +204,8 @@ class IrRemoteCard extends HTMLElement {
     if (!config) throw new Error('Invalid configuration');
     const t = config.transport || {};
     const type = (t.type || 'esphome').toLowerCase();
-    if (!['esphome', 'tasmota', 'none'].includes(type)) {
-      throw new Error(`transport.type must be esphome, tasmota or none (got "${t.type}")`);
+    if (!['esphome', 'tasmota', 'text', 'none'].includes(type)) {
+      throw new Error(`transport.type must be esphome, tasmota, text or none (got "${t.type}")`);
     }
     this._config = {
       name: 'Stereo Amplifier',
@@ -473,7 +486,7 @@ class IrRemoteCard extends HTMLElement {
     const sub = [];
     if (input) sub.push(`Input: ${esc(input)}`);
     if (muted) sub.push('Muted');
-    if (!sub.length) sub.push(c.subtitle ? esc(c.subtitle) : `IR via ${t === 'tasmota' ? 'Tasmota' : t === 'esphome' ? 'ESPHome' : 'actions'}`);
+    if (!sub.length) sub.push(c.subtitle ? esc(c.subtitle) : `IR via ${({ tasmota: 'Tasmota', esphome: 'ESPHome', text: 'text entity' })[t] || 'actions'}`);
 
     const sections = (Array.isArray(c.sections) ? c.sections : SECTION_KEYS).map((s) => {
       switch (s) {
@@ -682,7 +695,10 @@ function pickKey(o, name) {
 function cmdToForm(cmd, type, def) {
   const d = { mode: 'none', hold_repeat: def, times: 1 };
   if (cmd == null) return d;
-  if (typeof cmd === 'string') return { ...d, mode: 'entity', entity: cmd };
+  if (typeof cmd === 'string') {
+    if (type === 'text' && !ENTITY_CMD_RE.test(cmd)) return { ...d, mode: 'code', code: cmd };
+    return { ...d, mode: 'entity', entity: cmd };
+  }
   if (Array.isArray(cmd)) return { ...d, mode: 'sequence', steps: cmd };
   const { base, opts } = splitOpts(cmd);
   for (const k of REPEAT_KEYS) if (opts[k] !== undefined) d[k] = opts[k];
@@ -694,7 +710,9 @@ function cmdToForm(cmd, type, def) {
     const { raw, ...extra } = base;
     return { ...d, mode: 'raw', raw: Array.isArray(raw) ? raw.join(', ') : String(raw), extra: isEmpty(extra) ? undefined : extra };
   }
+  if (base.code !== undefined) return { ...d, mode: 'code', code: String(base.code) };
   const rest = { ...base };
+  if (type === 'text') return { ...d, mode: 'code', code: '' };
   if (type === 'tasmota') {
     const out = { ...d, mode: 'code' };
     for (const [name, field] of [['protocol', 'protocol'], ['bits', 'bits'], ['data', 'ir_data']]) {
@@ -735,6 +753,7 @@ function formToCmd(d, type, def) {
       return { sequence: Array.isArray(d.steps) ? d.steps : [], ...opts };
     case 'code':
     default:
+      if (type === 'text') return { code: d.code ?? '', ...opts };
       if (type === 'tasmota') {
         const out = {};
         if (!isEmpty(d.protocol)) out.protocol = d.protocol;
@@ -748,7 +767,8 @@ function formToCmd(d, type, def) {
 
 function cmdSchema(mode, type, transport, def) {
   const modes = ['none'];
-  if (type !== 'none') modes.push('code', 'raw');
+  if (type !== 'none') modes.push('code');
+  if (type === 'esphome' || type === 'tasmota') modes.push('raw');
   modes.push('entity', 'action', 'sequence');
   const s = [{
     name: 'mode', label: 'Send as',
@@ -757,6 +777,10 @@ function cmdSchema(mode, type, transport, def) {
   const tdef = transport.data || {};
   switch (mode) {
     case 'code':
+      if (type === 'text') {
+        s.push({ name: 'code', label: 'Code to send (the text set on the IR entity)', selector: { text: {} } });
+        break;
+      }
       if (type === 'tasmota') {
         s.push({ type: 'grid', name: '', schema: [
           { name: 'protocol', label: `Protocol${tdef.protocol ? ` (default ${tdef.protocol})` : ''}`, selector: { text: {} } },
@@ -804,7 +828,8 @@ function describeCmd(cmd, type) {
     case 'action': return d.action || 'action';
     case 'raw': return 'raw';
     case 'sequence': return `sequence (${(Array.isArray(d.steps) ? d.steps.length : 0)} steps)`;
-    case 'code': return type === 'tasmota' ? (d.ir_data || 'no code') : (d.address || d.command ? `${d.address || '?'} / ${d.command || '?'}` : 'no code');
+    case 'code': if (type === 'text') return d.code || 'no code';
+      return type === 'tasmota' ? (d.ir_data || 'no code') : (d.address || d.command ? `${d.address || '?'} / ${d.command || '?'}` : 'no code');
     default: return '';
   }
 }
@@ -993,24 +1018,34 @@ class IrRemoteCardEditor extends HTMLElement {
       ] },
       { name: 'subtitle', label: 'Subtitle (shown when no input is known)', selector: { text: {} } },
       { name: 'type', label: 'IR blaster', selector: { select: { mode: 'dropdown', options: [
-        { value: 'esphome', label: 'ESPHome' }, { value: 'tasmota', label: 'Tasmota (MQTT)' }, { value: 'none', label: 'None: buttons, scripts and actions only' },
+        { value: 'esphome', label: 'ESPHome' }, { value: 'tasmota', label: 'Tasmota (MQTT)' }, { value: 'text', label: 'Text entity (text.set_value)' }, { value: 'none', label: 'None: buttons, scripts and actions only' },
       ] } } },
     ];
     if (type === 'esphome') {
       genSchema.push({ name: 'service', label: 'ESPHome send action (e.g. esphome.ir_blaster_send_nec)', selector: { text: {} } });
       genSchema.push({ name: 'raw_service', label: 'ESPHome raw send action (optional, e.g. esphome.ir_blaster_send_raw)', selector: { text: {} } });
+    } else if (type === 'text') {
+      genSchema.push({ name: 'entity', label: 'Text entity that sends the IR code', selector: { entity: { filter: { domain: ['text', 'input_text'] } } } });
+      genSchema.push({ type: 'grid', name: '', schema: [
+        { name: 'prefix', label: 'Prefix added to every code (optional)', selector: { text: {} } },
+        { name: 'suffix', label: 'Suffix added to every code (optional)', selector: { text: {} } },
+      ] });
+      genSchema.push({ type: 'grid', name: '', schema: [
+        { name: 'reset_value', label: 'Then set it back to (optional)', selector: { text: {} } },
+        { name: 'reset_delay', label: 'after (default 100)', selector: { number: { min: 0, max: 5000, step: 10, mode: 'box', unit_of_measurement: 'ms' } } },
+      ] });
     } else if (type === 'tasmota') {
       genSchema.push({ name: 'topic', label: 'Tasmota device topic (sends to cmnd/<topic>/IRSend)', selector: { text: {} } });
     }
-    if (type !== 'none') {
+    if (type === 'esphome' || type === 'tasmota') {
       genSchema.push({ name: 'data', label: type === 'tasmota' ? 'Fields added to every code (YAML, e.g. protocol: NEC, bits: 32)' : 'Fields added to every code (YAML, optional)', selector: { object: {} } });
     }
-    const genData = { name: c.name ?? 'Stereo Amplifier', icon: c.icon ?? 'mdi:amplifier', subtitle: c.subtitle, type, service: t.service, raw_service: t.raw_service, topic: t.topic, data: t.data };
+    const genData = { name: c.name ?? 'Stereo Amplifier', icon: c.icon ?? 'mdi:amplifier', subtitle: c.subtitle, type, service: t.service, raw_service: t.raw_service, topic: t.topic, data: t.data, entity: t.entity, prefix: t.prefix, suffix: t.suffix, reset_value: t.reset_value, reset_delay: t.reset_delay };
     const general = this._mount(genSchema, genData, (v, form) => {
       form.data = v;
       for (const k of ['name', 'icon', 'subtitle']) { if (isEmpty(v[k])) delete c[k]; else c[k] = v[k]; }
       const nt = { ...(c.transport || {}) };
-      for (const k of ['type', 'service', 'raw_service', 'topic', 'data']) { if (isEmpty(v[k])) delete nt[k]; else nt[k] = v[k]; }
+      for (const k of ['type', 'service', 'raw_service', 'topic', 'data', 'entity', 'prefix', 'suffix', 'reset_value', 'reset_delay']) { if (isEmpty(v[k])) delete nt[k]; else nt[k] = v[k]; }
       c.transport = nt;
       this._emit();
       if ((nt.type || 'esphome') !== type) this._render();
@@ -1176,7 +1211,7 @@ class IrRemoteCardEditor extends HTMLElement {
     root.querySelectorAll('button[data-add]').forEach((b) => b.addEventListener('click', () => {
       const key = b.dataset.add;
       const type = this._type;
-      const blank = () => (type === 'tasmota' ? { data: '' } : type === 'esphome' ? { address: '', command: '' } : '');
+      const blank = () => (type === 'tasmota' ? { data: '' } : type === 'esphome' ? { address: '', command: '' } : type === 'text' ? { code: '' } : '');
       const arr = c[key] || (c[key] = []);
       const n = arr.length + 1;
       if (key === 'inputs') arr.push({ name: `Input ${n}`, icon: 'mdi:import', command: blank() });

@@ -1,6 +1,6 @@
 # IR Remote Card
 
-A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifier. It sends commands through an **ESPHome** or **Tasmota** IR blaster, or through any HA action, script or button entity. It is styled to match the TrueNAS / Proxmox VE cards: a badge header with a status dot, a status pill and tinted, collapsible panels.
+A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifier. It sends commands through an **ESPHome** or **Tasmota** IR blaster, a **text entity** that transmits whatever code is written to it, or through any HA action, script or button entity. It is styled to match the TrueNAS / Proxmox VE cards: a badge header with a status dot, a status pill and tinted, collapsible panels.
 
 - **Power** (on / off / toggle), **Volume** (hold to repeat), **Mute**, **Inputs**, **Tone** (bass/treble style −/+ rows) and **Extras**
 - Remembers the current input, power and mute state (IR is one-way, so these are *assumed* unless you give it real entities)
@@ -20,18 +20,18 @@ A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifi
 **Manual:**
 
 1. Copy `ir-remote-card.js` to `/config/www/ir-remote-card.js`.
-2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.1.0`, type *JavaScript module*.
+2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.2.0`, type *JavaScript module*.
 3. Bump `?v=` after every update. HA caches hard.
 
 ## Visual editor
 
 Add the card from the dashboard card picker and everything can be set in the editor:
 
-- **General & IR blaster**: name, icon, ESPHome or Tasmota, the send action or topic, and fields added to every code.
+- **General & IR blaster**: name, icon, ESPHome, Tasmota or a text entity, plus the send action, topic or entity, and fields added to every code.
 - **State entities**: optional real power, input, volume and mute state.
 - **Sections**: tick to show or hide, arrows to reorder, an optional title for each, and whether it starts collapsed.
 - **One block per section**: every button has a command editor. *Send as* picks the kind of command:
-  - **IR code**: ESPHome address and command, or Tasmota protocol, bits and data
+  - **IR code**: ESPHome address and command, Tasmota protocol, bits and data, or for a text entity simply the code text
   - **Raw IR timings**: microseconds, + for on and − for off (ESPHome needs a raw send action, see below)
   - **Button / script / scene**
   - **Home Assistant action**: any action with YAML data, e.g. `esphome.ir_blaster_send_pronto`
@@ -87,6 +87,38 @@ HA then has `esphome.ir_blaster_send_nec` (and `esphome.ir_blaster_send_raw`) (n
 **Learning codes:** open the device logs in ESPHome, point the amp's remote at the receiver and press each key. You'll see lines like `Received NEC: address=0x7A85, command=0x1A`. Those two numbers go into the card.
 
 Other protocols (RC5, Sony, Samsung, raw…) work the same way. Add another action, e.g. `send_rc5` with `transmit_rc5`, and either set it as the transport `service` or override it per command with `service_override: esphome.ir_blaster_send_rc5`.
+
+## Text entity setup
+
+If your IR sender sends whatever code you write to a `text` (or `input_text`) entity, the way you'd do it by hand with **Developer tools → Actions → `text.set_value`**, choose **Text entity** as the IR blaster. Each button is then just the code text, and the card calls:
+
+```yaml
+action: text.set_value
+target: { entity_id: text.ir_sender_2_ir_code_to_send }
+data: { value: <code> }
+```
+
+- **Prefix / suffix**: added to every code, if your sender expects a common format.
+- **Then set it back to**: optionally writes a second value afterwards (after 100 ms by default). Use this if your sender only transmits when the text *changes*, so pressing the same button twice, or holding volume, still sends every time.
+
+```yaml
+type: custom:ir-remote-card
+name: Stereo Amplifier
+transport:
+  type: text
+  entity: text.ir_sender_2_ir_code_to_send
+  # reset_value: idle
+  # reset_delay: 100
+commands:
+  power: { code: "your power code" }
+  volume_up: { code: "your volume up code" }
+  volume_down: { code: "your volume down code" }
+  mute: { code: "your mute code" }
+inputs:
+  - { name: CD, icon: mdi:disc, command: { code: "your CD code" } }
+```
+
+With a text entity, a plain string also works as a code (`power: "your power code"`), except strings that look like `button.x`, `script.x` or `scene.x`, which still press or run that entity.
 
 ## Tasmota setup
 
@@ -161,6 +193,7 @@ Anywhere a command is expected you can use:
 | `button.amp_dimmer` / `input_button.x` | `button.press` |
 | `script.amp_on` / `scene.x` | `turn_on` |
 | `{ action: domain.service, data: {…} }` | any HA action |
+| `{ code: "…" }` or a plain string (text entity) | `text.set_value` on `transport.entity` |
 | `{ raw: "9000, -4500, 560, …" }` (ESPHome) | `transport.raw_service` with `code: [9000, -4500, 560, …]` |
 | `{ sequence: [...] }` or a plain list, with `{ delay: ms }` steps | a macro, run in order |
 
@@ -184,7 +217,10 @@ These keys are never sent to the IR blaster. Protocol-level repeats are separate
 | Option | Default | |
 |---|---|---|
 | `name`, `icon`, `subtitle` | Stereo Amplifier, `mdi:amplifier` | subtitle shows when no input or mute is known |
-| `transport.type` | `esphome` | `esphome`, `tasmota` or `none` (action/entity commands only) |
+| `transport.type` | `esphome` | `esphome`, `tasmota`, `text` or `none` (action/entity commands only) |
+| `transport.entity` | – | text entity: the `text`/`input_text` entity that sends the code |
+| `transport.prefix` / `suffix` | – | text entity: added around every code |
+| `transport.reset_value` / `reset_delay` | – / 100 ms | text entity: value written after each code |
 | `transport.service` | – | ESPHome action, e.g. `esphome.ir_blaster_send_nec` |
 | `transport.raw_service` | – | ESPHome action for raw timings, e.g. `esphome.ir_blaster_send_raw` |
 | `transport.topic` / `full_topic` | – | Tasmota |
