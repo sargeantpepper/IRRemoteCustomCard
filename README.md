@@ -2,7 +2,7 @@
 
 A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifier. It sends commands through an **ESPHome** or **Tasmota** IR blaster, a **text entity** that transmits whatever code is written to it, or through any HA action, script or button entity. It is styled to match the TrueNAS / Proxmox VE cards: a badge header with a status dot, a status pill and tinted, collapsible panels.
 
-- **Power** (on / off / toggle), **Volume** (hold to repeat), **Mute**, **Inputs**, **Tone** (bass/treble style −/+ rows) and **Extras**
+- **Power button in the header** (compact; or a full Power section if you prefer), **Volume** (hold to repeat), **Mute**, **Inputs**, **Tone** (bass/treble style −/+ rows) and **Extras**
 - Remembers the current input, power and mute state (IR is one-way, so these are *assumed* unless you give it real entities)
 - Optional real state: a smart-plug power sensor for on/off, an `input_select` for the input, a number/sensor for a volume bar
 - Macros: a list of commands with optional delays (e.g. power on → wait → select TV)
@@ -20,14 +20,14 @@ A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifi
 **Manual:**
 
 1. Copy `ir-remote-card.js` to `/config/www/ir-remote-card.js`.
-2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.2.0`, type *JavaScript module*.
+2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.3.0`, type *JavaScript module*.
 3. Bump `?v=` after every update. HA caches hard.
 
 ## Visual editor
 
 Add the card from the dashboard card picker and everything can be set in the editor:
 
-- **General & IR blaster**: name, icon, ESPHome, Tasmota or a text entity, plus the send action, topic or entity, and fields added to every code.
+- **General & IR blaster**: name, icon, power button in the header or a Power section, ESPHome, Tasmota or a text entity, plus the send action, topic or entity, and fields added to every code.
 - **State entities**: optional real power, input, volume and mute state.
 - **Sections**: tick to show or hide, arrows to reorder, an optional title for each, and whether it starts collapsed.
 - **One block per section**: every button has a command editor. *Send as* picks the kind of command:
@@ -87,6 +87,15 @@ HA then has `esphome.ir_blaster_send_nec` (and `esphome.ir_blaster_send_raw`) (n
 **Learning codes:** open the device logs in ESPHome, point the amp's remote at the receiver and press each key. You'll see lines like `Received NEC: address=0x7A85, command=0x1A`. Those two numbers go into the card.
 
 Other protocols (RC5, Sony, Samsung, raw…) work the same way. Add another action, e.g. `send_rc5` with `transmit_rc5`, and either set it as the transport `service` or override it per command with `service_override: esphome.ir_blaster_send_rc5`.
+
+## Power button
+
+By default power is a round button in the top right of the card, in place of the status pill. Its colour shows the state: green for on, grey for off, amber for unknown. A dashed ring means the state is assumed. Pressing it sends:
+
+- **Off** when the amp is on, and **On** when it's off, if you've set discrete `power_on` / `power_off` codes
+- otherwise the **toggle** code (`power`)
+
+Set `power_button: section` to get the old Power panel with separate On / Toggle / Off buttons instead.
 
 ## Text entity setup
 
@@ -229,7 +238,8 @@ These keys are never sent to the IR blaster. Protocol-level repeats are separate
 | `input_entity` | – | `input_select`, `select` or `input_text`; the card sets it when you press an input |
 | `volume_entity` | – | number/sensor; `volume_min`/`volume_max`/`volume_unit` override its attributes |
 | `mute_entity` | – | on/off entity for real mute state |
-| `sections` | `[power, volume, inputs, adjust, buttons]` | order and which to show |
+| `power_button` | `header` | `header` (one button top right) or `section` (Power panel) |
+| `sections` | `[power, volume, inputs, adjust, buttons]` | order and which to show (`power` only applies with `power_button: section`) |
 | `section_titles` | – | e.g. `{ adjust: Tone & Balance }` |
 | `collapsed` | `[]` | sections that start collapsed (the user's choice is then remembered) |
 | `inputs_columns`, `buttons_columns` | 3 | |

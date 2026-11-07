@@ -7,7 +7,7 @@
  * TrueNAS / Proxmox VE cards: badge header, status pill, tinted collapsible panels.
  * Includes a visual editor.
  */
-const CARD_VERSION = '1.2.0';
+const CARD_VERSION = '1.3.0';
 
 const SECTION_KEYS = ['power', 'volume', 'inputs', 'adjust', 'buttons'];
 const SECTION_TITLES = { power: 'Power', volume: 'Volume', inputs: 'Inputs', adjust: 'Tone', buttons: 'Extras' };
@@ -410,6 +410,18 @@ class IrRemoteCard extends HTMLElement {
     </div>`;
   }
 
+  /** Which power command the header button sends, given the current state. */
+  _powerAction(state) {
+    const cm = this._config.commands;
+    const has = (k) => cm[k] != null && cm[k] !== '';
+    if (state === 'on' && has('power_off')) return ['commands.power_off', 'power_off', 'Turn off'];
+    if (state === 'off' && has('power_on')) return ['commands.power_on', 'power_on', 'Turn on'];
+    if (has('power')) return ['commands.power', 'power', state === 'on' ? 'Turn off' : state === 'off' ? 'Turn on' : 'Power (toggle)'];
+    if (has('power_on')) return ['commands.power_on', 'power_on', 'Turn on'];
+    if (has('power_off')) return ['commands.power_off', 'power_off', 'Turn off'];
+    return null;
+  }
+
   _sectionPower() {
     const cm = this._config.commands;
     const has = (k) => cm[k] != null && cm[k] !== '';
@@ -488,9 +500,17 @@ class IrRemoteCard extends HTMLElement {
     if (muted) sub.push('Muted');
     if (!sub.length) sub.push(c.subtitle ? esc(c.subtitle) : `IR via ${({ tasmota: 'Tasmota', esphome: 'ESPHome', text: 'text entity' })[t] || 'actions'}`);
 
+    const headerPower = (c.power_button || 'header') === 'header';
+    const pAct = headerPower ? this._powerAction(power.state) : null;
+    const stateText = power.assumed ? `${pillText} (assumed: IR is one-way)` : `${pillText} (from ${c.power_entity})`;
+    const right = pAct
+      ? `<button class="hpower ${power.state}${power.assumed ? ' assumed' : ''}" data-cmd="${pAct[0]}" data-kind="${pAct[1]}"
+          title="${esc(`${pAct[2]} · ${stateText}`)}" aria-label="${esc(`${pAct[2]}. Currently ${stateText}`)}"><ha-icon icon="mdi:power"></ha-icon></button>`
+      : `<div class="pill ${power.state}${power.assumed ? ' assumed' : ''}" title="${esc(pillTitle)}"><span class="pdot"></span>${pillText}</div>`;
+
     const sections = (Array.isArray(c.sections) ? c.sections : SECTION_KEYS).map((s) => {
       switch (s) {
-        case 'power': return this._panel('power', this._sectionPower());
+        case 'power': return headerPower ? '' : this._panel('power', this._sectionPower());
         case 'volume': return this._panel('volume', this._sectionVolume(), muted ? '<span class="tag warn">Muted</span>' : '');
         case 'inputs': return this._panel('inputs', this._sectionInputs(), input ? `<span class="tag">${esc(input)}</span>` : '');
         case 'adjust': return this._panel('adjust', this._sectionAdjust());
@@ -518,9 +538,7 @@ class IrRemoteCard extends HTMLElement {
             <div class="name">${esc(c.name)}</div>
             <div class="sub">${sub.join(' · ')}</div>
           </div>
-          <div class="pill ${power.state}${power.assumed ? ' assumed' : ''}" title="${esc(pillTitle)}">
-            <span class="pdot"></span>${pillText}
-          </div>
+          ${right}
         </div>
         <div class="body">${sections || '<div class="empty">No sections enabled</div>'}</div>
       </ha-card>`;
@@ -541,6 +559,7 @@ class IrRemoteCard extends HTMLElement {
       h.addEventListener('click', toggle);
       h.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
     });
+    root.querySelectorAll('button.hpower').forEach((b) => b.addEventListener('click', () => this._fire(b)));
     root.querySelectorAll('button.btn').forEach((b) => {
       if (b.dataset.repeat) {
         b.addEventListener('pointerdown', (e) => {
@@ -596,6 +615,20 @@ ha-card { font-size: .9em; overflow: hidden; }
 .pill.on .pdot { background: var(--ir-green); }
 .pill.unknown { background: color-mix(in srgb, var(--ir-amber) 16%, transparent); color: var(--ir-amber); }
 .pill.assumed { border-style: dashed; border-color: currentColor; }
+.hpower { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; padding: 0; cursor: pointer;
+  font: inherit; border: 2px solid transparent; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  background: color-mix(in srgb, var(--ir-muted) 14%, transparent); color: var(--ir-muted);
+  transition: background .15s, transform .08s, box-shadow .2s, color .2s; }
+.hpower ha-icon { --mdc-icon-size: 22px; }
+.hpower:hover { background: color-mix(in srgb, var(--ir-muted) 22%, transparent); }
+.hpower:active { transform: scale(.92); }
+.hpower:focus-visible { outline: 2px solid var(--ir-accent); outline-offset: 2px; }
+.hpower.on { background: color-mix(in srgb, var(--ir-green) 20%, transparent); color: var(--ir-green); }
+.hpower.on:hover { background: color-mix(in srgb, var(--ir-green) 28%, transparent); }
+.hpower.unknown { background: color-mix(in srgb, var(--ir-amber) 14%, transparent); color: var(--ir-amber); }
+.hpower.assumed { border-style: dashed; border-color: color-mix(in srgb, currentColor 55%, transparent); }
+.hpower.sent { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ir-green) 45%, transparent); }
+.hpower.err { box-shadow: 0 0 0 3px var(--ir-red); }
 .body { padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .empty { color: var(--ir-muted); text-align: center; padding: 8px; font-size: .9em; }
 
@@ -981,7 +1014,8 @@ class IrRemoteCardEditor extends HTMLElement {
     );
     switch (sec) {
       case 'power':
-        return `<p class="hint">Use a single toggle code, discrete on/off codes, or both.</p>
+        return `<p class="hint">Use a single toggle code, discrete on/off codes, or both.${(c.power_button || 'header') === 'header'
+          ? ' The header button sends Off when the amp is on and On when it is off, if those codes are set; otherwise the toggle.' : ''}</p>
           ${this._cmd('commands.power', 'Power toggle')}${this._cmd('commands.power_on', 'Power on')}${this._cmd('commands.power_off', 'Power off')}`;
       case 'volume':
         return `${this._cmd('commands.volume_up', 'Volume up')}${this._cmd('commands.volume_down', 'Volume down')}${this._cmd('commands.mute', 'Mute')}`;
@@ -1017,6 +1051,9 @@ class IrRemoteCardEditor extends HTMLElement {
         { name: 'icon', label: 'Icon', selector: { icon: {} } },
       ] },
       { name: 'subtitle', label: 'Subtitle (shown when no input is known)', selector: { text: {} } },
+      { name: 'power_button', label: 'Power', selector: { select: { mode: 'dropdown', options: [
+        { value: 'header', label: 'Power button in the header (compact)' }, { value: 'section', label: 'Power section with buttons' },
+      ] } } },
       { name: 'type', label: 'IR blaster', selector: { select: { mode: 'dropdown', options: [
         { value: 'esphome', label: 'ESPHome' }, { value: 'tasmota', label: 'Tasmota (MQTT)' }, { value: 'text', label: 'Text entity (text.set_value)' }, { value: 'none', label: 'None: buttons, scripts and actions only' },
       ] } } },
@@ -1040,15 +1077,17 @@ class IrRemoteCardEditor extends HTMLElement {
     if (type === 'esphome' || type === 'tasmota') {
       genSchema.push({ name: 'data', label: type === 'tasmota' ? 'Fields added to every code (YAML, e.g. protocol: NEC, bits: 32)' : 'Fields added to every code (YAML, optional)', selector: { object: {} } });
     }
-    const genData = { name: c.name ?? 'Stereo Amplifier', icon: c.icon ?? 'mdi:amplifier', subtitle: c.subtitle, type, service: t.service, raw_service: t.raw_service, topic: t.topic, data: t.data, entity: t.entity, prefix: t.prefix, suffix: t.suffix, reset_value: t.reset_value, reset_delay: t.reset_delay };
+    const genData = { name: c.name ?? 'Stereo Amplifier', icon: c.icon ?? 'mdi:amplifier', subtitle: c.subtitle, power_button: c.power_button || 'header', type, service: t.service, raw_service: t.raw_service, topic: t.topic, data: t.data, entity: t.entity, prefix: t.prefix, suffix: t.suffix, reset_value: t.reset_value, reset_delay: t.reset_delay };
     const general = this._mount(genSchema, genData, (v, form) => {
       form.data = v;
+      const prevPower = c.power_button || 'header';
       for (const k of ['name', 'icon', 'subtitle']) { if (isEmpty(v[k])) delete c[k]; else c[k] = v[k]; }
+      if (isEmpty(v.power_button) || v.power_button === 'header') delete c.power_button; else c.power_button = v.power_button;
       const nt = { ...(c.transport || {}) };
       for (const k of ['type', 'service', 'raw_service', 'topic', 'data', 'entity', 'prefix', 'suffix', 'reset_value', 'reset_delay']) { if (isEmpty(v[k])) delete nt[k]; else nt[k] = v[k]; }
       c.transport = nt;
       this._emit();
-      if ((nt.type || 'esphome') !== type) this._render();
+      if ((nt.type || 'esphome') !== type || (c.power_button || 'header') !== prevPower) this._render();
     });
 
     // ---- state entities ----
@@ -1070,19 +1109,32 @@ class IrRemoteCardEditor extends HTMLElement {
 
     // ---- sections ----
     const enabled = Array.isArray(c.sections) ? c.sections : SECTION_KEYS;
-    const secRows = this._order.map((k, i) => `<div class="secrow${enabled.includes(k) ? '' : ' off'}">
+    const headerPower = (c.power_button || 'header') === 'header';
+    const secRows = this._order.map((k, i) => {
+      if (k === 'power' && headerPower) {
+        return `<div class="secrow fixed">
+        <input type="checkbox" checked disabled aria-label="Power is in the header">
+        <ha-icon icon="${SECTION_ICONS[k]}"></ha-icon>
+        <span class="fixedlabel">Power: button in the header <span class="hint">(change under General)</span></span>
+        <button class="ib" data-smove="${i}:-1" ${i === 0 ? 'disabled' : ''} title="Move up"><ha-icon icon="mdi:arrow-up"></ha-icon></button>
+        <button class="ib" data-smove="${i}:1" ${i === this._order.length - 1 ? 'disabled' : ''} title="Move down"><ha-icon icon="mdi:arrow-down"></ha-icon></button>
+      </div>`;
+      }
+      return `<div class="secrow${enabled.includes(k) ? '' : ' off'}">
         <input type="checkbox" data-sec="${k}" ${enabled.includes(k) ? 'checked' : ''} aria-label="Show ${SECTION_TITLES[k]}">
         <ha-icon icon="${SECTION_ICONS[k]}"></ha-icon>
         <input class="stitle" data-title="${k}" placeholder="${SECTION_TITLES[k]}" value="${esc(c.section_titles?.[k] || '')}" aria-label="Title for ${SECTION_TITLES[k]}">
         <label class="coll" title="Start collapsed"><input type="checkbox" data-coll="${k}" ${(c.collapsed || []).includes(k) ? 'checked' : ''}>collapsed</label>
         <button class="ib" data-smove="${i}:-1" ${i === 0 ? 'disabled' : ''} title="Move up"><ha-icon icon="mdi:arrow-up"></ha-icon></button>
         <button class="ib" data-smove="${i}:1" ${i === this._order.length - 1 ? 'disabled' : ''} title="Move down"><ha-icon icon="mdi:arrow-down"></ha-icon></button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     const sections = `<p class="hint">Tick to show, use the arrows to reorder. Titles are optional.</p><div class="secs">${secRows}</div>`;
 
     // ---- per section content ----
-    const content = this._order.filter((k) => enabled.includes(k)).map((k) =>
-      this._block(`sec:${k}`, c.section_titles?.[k] || SECTION_TITLES[k], SECTION_ICONS[k], this._sectionBody(k))).join('');
+    const shown = headerPower ? ['power', ...this._order.filter((k) => k !== 'power' && enabled.includes(k))] : this._order.filter((k) => enabled.includes(k));
+    const content = shown.map((k) => this._block(`sec:${k}`,
+      k === 'power' && headerPower ? 'Power button' : (c.section_titles?.[k] || SECTION_TITLES[k]), SECTION_ICONS[k], this._sectionBody(k))).join('');
 
     // ---- options ----
     const optSchema = [
@@ -1251,6 +1303,8 @@ const EDITOR_STYLE = `
 .secrow { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px;
   background: color-mix(in srgb, var(--primary-text-color, #212121) 4%, transparent); }
 .secrow.off { opacity: .55; }
+.fixedlabel { flex: 1; min-width: 0; font-size: .95em; }
+.fixedlabel .hint { display: inline; }
 .secrow > ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); }
 .secrow input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--primary-color, #03a9f4); margin: 0; }
 .stitle { flex: 1; min-width: 0; font: inherit; color: var(--primary-text-color); background: transparent;
