@@ -160,3 +160,7 @@ Anywhere a command is expected you can use:
 | `debug` | false | log every call to the console |
 
 Assumed state lives in each browser's local storage, so two phones can disagree. Set `power_entity`, `input_entity` and so on if you want one shared truth. A smart plug with power monitoring is the easy way to get real on/off.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
