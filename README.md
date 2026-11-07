@@ -7,8 +7,9 @@ A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifi
 - Optional real state: a smart-plug power sensor for on/off, an `input_select` for the input, a number/sensor for a volume bar
 - Macros: a list of commands with optional delays (e.g. power on → wait → select TV)
 - Background options shared with the TrueNAS card: `background_opacity`, `glass_background`, `card_background`
+- **Visual editor**: turn sections on or off, reorder and rename them, add, reorder and remove buttons, pick how each command is sent, set repeat options, and **Test** each command from the editor
 
-![IR Remote Card](images/preview.png)
+![IR Remote Card](images/preview.png) ![Editor](images/editor.png)
 
 *(Preview from the test harness: icons are placeholders.)*
 
@@ -18,10 +19,28 @@ A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifi
 
 **Manual:**
 
-
 1. Copy `ir-remote-card.js` to `/config/www/ir-remote-card.js`.
-2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.0.0`, type *JavaScript module*.
+2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.1.0`, type *JavaScript module*.
 3. Bump `?v=` after every update. HA caches hard.
+
+## Visual editor
+
+Add the card from the dashboard card picker and everything can be set in the editor:
+
+- **General & IR blaster**: name, icon, ESPHome or Tasmota, the send action or topic, and fields added to every code.
+- **State entities**: optional real power, input, volume and mute state.
+- **Sections**: tick to show or hide, arrows to reorder, an optional title for each, and whether it starts collapsed.
+- **One block per section**: every button has a command editor. *Send as* picks the kind of command:
+  - **IR code**: ESPHome address and command, or Tasmota protocol, bits and data
+  - **Raw IR timings**: microseconds, + for on and − for off (ESPHome needs a raw send action, see below)
+  - **Button / script / scene**
+  - **Home Assistant action**: any action with YAML data, e.g. `esphome.ir_blaster_send_pronto`
+  - **Sequence (macro)**: a YAML list of commands with `{delay: ms}` steps
+  - **Not used**: hides the button
+- **Repeat options** for each command: repeat while held (on by default for volume and tone), its own hold timings, send each press N times, and the gap between sends.
+- **Test** sends the command straight away, so you can check a code before saving.
+
+Anything set in the editor can also be written in YAML, as below.
 
 ## ESPHome setup
 
@@ -51,7 +70,19 @@ api:
             command: !lambda 'return command;'
 ```
 
-HA then has `esphome.ir_blaster_send_nec` (node name with `-` → `_`, then `_` + action name).
+For **raw timings** add a second action and set it as the *raw send action* (`transport.raw_service`):
+
+```yaml
+    - action: send_raw
+      variables:
+        code: int[]
+      then:
+        - remote_transmitter.transmit_raw:
+            code: !lambda 'return code;'
+            carrier_frequency: 38kHz
+```
+
+HA then has `esphome.ir_blaster_send_nec` (and `esphome.ir_blaster_send_raw`) (node name with `-` → `_`, then `_` + action name).
 
 **Learning codes:** open the device logs in ESPHome, point the amp's remote at the receiver and press each key. You'll see lines like `Received NEC: address=0x7A85, command=0x1A`. Those two numbers go into the card.
 
@@ -130,7 +161,23 @@ Anywhere a command is expected you can use:
 | `button.amp_dimmer` / `input_button.x` | `button.press` |
 | `script.amp_on` / `scene.x` | `turn_on` |
 | `{ action: domain.service, data: {…} }` | any HA action |
-| a list, with `{ delay: ms }` steps | a macro, run in order |
+| `{ raw: "9000, -4500, 560, …" }` (ESPHome) | `transport.raw_service` with `code: [9000, -4500, 560, …]` |
+| `{ sequence: [...] }` or a plain list, with `{ delay: ms }` steps | a macro, run in order |
+
+### Repeat options (on any command)
+
+```yaml
+volume_up:
+  address: 0x7A85
+  command: 0x1A
+  hold_repeat: true       # repeat while held (default on for volume and tone, off elsewhere)
+  repeat_delay: 300       # ms before the first repeat (default: card repeat_delay)
+  repeat_interval: 120    # ms between repeats (default: card repeat_interval)
+  times: 2                # send this many times per press
+  gap: 80                 # ms between those sends (default 100)
+```
+
+These keys are never sent to the IR blaster. Protocol-level repeats are separate: Tasmota's `repeat`, or any field your ESPHome action takes, go through as normal fields.
 
 ## Options
 
@@ -139,6 +186,7 @@ Anywhere a command is expected you can use:
 | `name`, `icon`, `subtitle` | Stereo Amplifier, `mdi:amplifier` | subtitle shows when no input or mute is known |
 | `transport.type` | `esphome` | `esphome`, `tasmota` or `none` (action/entity commands only) |
 | `transport.service` | – | ESPHome action, e.g. `esphome.ir_blaster_send_nec` |
+| `transport.raw_service` | – | ESPHome action for raw timings, e.g. `esphome.ir_blaster_send_raw` |
 | `transport.topic` / `full_topic` | – | Tasmota |
 | `transport.data` | – | fields merged into every command |
 | `power_entity` | – | `on`/`off`, or a numeric power sensor (`power_threshold`, default 5 W) |
@@ -149,7 +197,7 @@ Anywhere a command is expected you can use:
 | `section_titles` | – | e.g. `{ adjust: Tone & Balance }` |
 | `collapsed` | `[]` | sections that start collapsed (the user's choice is then remembered) |
 | `inputs_columns`, `buttons_columns` | 3 | |
-| `repeat_delay`, `repeat_interval` | 400, 180 ms | hold-to-repeat timing for volume and tone |
+| `repeat_delay`, `repeat_interval` | 400, 180 ms | default hold-to-repeat timing (each command can override) |
 | `unmute_on_volume` | true | assumed mute clears when volume changes |
 | `input_powers_on` | true | selecting an input marks the amp as on (assumed state) |
 | `macro_delay` | 0 | extra ms between macro steps |
