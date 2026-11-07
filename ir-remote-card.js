@@ -7,7 +7,7 @@
  * TrueNAS / Proxmox VE cards: badge header, status pill, tinted collapsible panels.
  * Includes a visual editor.
  */
-const CARD_VERSION = '1.3.0';
+const CARD_VERSION = '1.4.0';
 
 const SECTION_KEYS = ['power', 'volume', 'inputs', 'adjust', 'buttons'];
 const SECTION_TITLES = { power: 'Power', volume: 'Volume', inputs: 'Inputs', adjust: 'Tone', buttons: 'Extras' };
@@ -26,6 +26,7 @@ const esc = (s) =>
 const ENTITY_CMD_RE = /^(button|input_button|script|scene)\.[a-z0-9_]+$/;
 const NUM_RE = /^(0x[0-9a-f]+|-?\d+)$/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const toggleOf = (cmd) => (cmd && typeof cmd === 'object' && !Array.isArray(cmd) && cmd.toggle ? cmd.toggle : null);
 const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 const isEmpty = (v) => v === undefined || v === null || v === '' || (isObj(v) && !Object.keys(v).length);
 const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
@@ -72,6 +73,12 @@ function resolveCall(cmd, transport) {
     return { domain, service, data };
   }
   if (cmd.entity !== undefined) return resolveCall(cmd.entity, transport);
+  if (cmd.toggle !== undefined) {
+    if (!cmd.toggle) throw new Error('Choose the switch to toggle');
+    const domain = String(cmd.toggle).split('.')[0];
+    const own = ['switch', 'input_boolean', 'light', 'fan'].includes(domain);
+    return { domain: own ? domain : 'homeassistant', service: 'toggle', data: { entity_id: cmd.toggle } };
+  }
 
   if (type === 'text') {
     if (!t.entity) throw new Error('Choose the text entity that sends IR codes (transport.entity)');
@@ -236,7 +243,7 @@ class IrRemoteCard extends HTMLElement {
     this._hass = hass;
     const c = this._config;
     if (!c) return;
-    const ids = [c.power_entity, c.input_entity, c.volume_entity, c.mute_entity].filter(Boolean);
+    const ids = [c.power_entity, c.input_entity, c.volume_entity, c.mute_entity, ...c.buttons.map((b) => toggleOf(b?.command))].filter(Boolean);
     const sig = ids.map((id) => {
       const s = hass.states[id];
       return s ? `${s.state}|${s.attributes.min}|${s.attributes.max}` : 'x';
@@ -385,14 +392,14 @@ class IrRemoteCard extends HTMLElement {
 
   /* ---------------- rendering ---------------- */
 
-  _btn({ path, kind, icon, label, cls = '', name, active = false, title }) {
+  _btn({ path, kind, icon, label, cls = '', name, active = false, title, sub }) {
     const cmd = getPath(this._config, path);
     if (cmd == null || cmd === '') return '';
     const repeat = holdFor(path, this._config);
     return `<button class="btn ${cls}${active ? ' active' : ''}" data-cmd="${esc(path)}" data-kind="${esc(kind || '')}"
       ${name != null ? `data-name="${esc(name)}"` : ''} ${repeat ? 'data-repeat="1"' : ''}
       title="${esc(title || label || '')}" aria-label="${esc(title || label || '')}" aria-pressed="${active}">
-      ${icon ? `<ha-icon icon="${esc(icon)}"></ha-icon>` : ''}${label ? `<span>${esc(label)}</span>` : ''}</button>`;
+      ${icon ? `<ha-icon icon="${esc(icon)}"></ha-icon>` : ''}${label ? `<span>${esc(label)}</span>` : ''}${sub ? `<small class="tstate">${esc(sub)}</small>` : ''}</button>`;
   }
 
   _panel(key, body, meta = '') {
@@ -477,9 +484,21 @@ class IrRemoteCard extends HTMLElement {
 
   _sectionButtons() {
     const c = this._config;
-    const items = c.buttons.map((b, i) => this._btn({
-      path: `buttons.${i}.command`, kind: 'button', icon: b.icon || 'mdi:remote', label: b.name, cls: 'tile',
-    })).join('');
+    const items = c.buttons.map((b, i) => {
+      const ent = toggleOf(b.command);
+      if (ent) {
+        const st = this._hass?.states[ent];
+        const on = st?.state === 'on';
+        const unavailable = !st || ['unavailable', 'unknown'].includes(st.state);
+        const name = b.name || st?.attributes.friendly_name || ent;
+        return this._btn({
+          path: `buttons.${i}.command`, kind: 'toggle', icon: b.icon || st?.attributes.icon || 'mdi:power-socket-uk', label: name,
+          cls: `tile switch${unavailable ? ' unavail' : ''}`, active: on,
+          sub: unavailable ? 'Unavailable' : on ? 'On' : 'Off', title: `${name}: ${unavailable ? 'unavailable' : on ? 'on, tap to turn off' : 'off, tap to turn on'}`,
+        });
+      }
+      return this._btn({ path: `buttons.${i}.command`, kind: 'button', icon: b.icon || 'mdi:remote', label: b.name, cls: 'tile' });
+    }).join('');
     return items ? `<div class="grid" style="--cols:${c.buttons_columns}">${items}</div>` : '';
   }
 
@@ -668,6 +687,11 @@ ha-card { font-size: .9em; overflow: hidden; }
 .btn.active { background: color-mix(in srgb, var(--tint, var(--ir-accent)) 22%, transparent);
   border-color: color-mix(in srgb, var(--tint, var(--ir-accent)) 55%, transparent); }
 .btn.tile.active ha-icon { color: var(--primary-text-color); }
+.tstate { font-size: .8em; color: var(--ir-muted); margin-top: -2px; }
+.btn.switch.active { --tint: var(--ir-green); }
+.btn.switch.active ha-icon { color: var(--ir-green); }
+.btn.switch.active .tstate { color: var(--ir-green-text); font-weight: 600; }
+.btn.unavail { opacity: .55; }
 .btn.power ha-icon, .btn.on ha-icon { color: var(--ir-green); }
 .btn.off ha-icon { color: var(--ir-red); }
 .btn.on.active { --tint: var(--ir-green); }
@@ -700,6 +724,7 @@ const MODE_LABELS = {
   code: 'IR code',
   raw: 'Raw IR timings',
   entity: 'Button / script / scene',
+  toggle: 'Switch / smart plug (toggle)',
   action: 'Home Assistant action',
   sequence: 'Sequence (macro)',
 };
@@ -739,6 +764,7 @@ function cmdToForm(cmd, type, def) {
   const act = base.action || base.service || base.perform_action;
   if (act) return { ...d, mode: 'action', action: act, action_data: base.data || base.service_data };
   if (base.entity !== undefined) return { ...d, mode: 'entity', entity: base.entity };
+  if (base.toggle !== undefined) return { ...d, mode: 'toggle', toggle: base.toggle };
   if (base.raw !== undefined) {
     const { raw, ...extra } = base;
     return { ...d, mode: 'raw', raw: Array.isArray(raw) ? raw.join(', ') : String(raw), extra: isEmpty(extra) ? undefined : extra };
@@ -775,6 +801,8 @@ function formToCmd(d, type, def) {
     case 'none': return undefined;
     case 'entity':
       return isEmpty(opts) ? (d.entity || '') : { entity: d.entity || '', ...opts };
+    case 'toggle':
+      return { toggle: d.toggle || '', ...opts };
     case 'action': {
       const out = { action: d.action || '' };
       if (!isEmpty(d.action_data)) out.data = d.action_data;
@@ -802,7 +830,7 @@ function cmdSchema(mode, type, transport, def) {
   const modes = ['none'];
   if (type !== 'none') modes.push('code');
   if (type === 'esphome' || type === 'tasmota') modes.push('raw');
-  modes.push('entity', 'action', 'sequence');
+  modes.push('entity', 'toggle', 'action', 'sequence');
   const s = [{
     name: 'mode', label: 'Send as',
     selector: { select: { mode: 'dropdown', options: modes.map((m) => ({ value: m, label: MODE_LABELS[m] })) } },
@@ -839,6 +867,9 @@ function cmdSchema(mode, type, transport, def) {
     case 'entity':
       s.push({ name: 'entity', label: 'Entity', selector: { entity: { filter: { domain: ['button', 'input_button', 'script', 'scene'] } } } });
       break;
+    case 'toggle':
+      s.push({ name: 'toggle', label: 'Switch to toggle (the button shows its on/off state in Extras)', selector: { entity: { filter: { domain: ['switch', 'input_boolean', 'light', 'fan'] } } } });
+      break;
     case 'action':
       s.push({ name: 'action', label: 'Action (domain.action, e.g. esphome.ir_blaster_send_pronto)', selector: { text: {} } });
       s.push({ name: 'action_data', label: 'Data (YAML)', selector: { object: {} } });
@@ -858,6 +889,7 @@ function describeCmd(cmd, type) {
   const d = cmdToForm(cmd, type, false);
   switch (d.mode) {
     case 'entity': return d.entity || 'no entity';
+    case 'toggle': return d.toggle ? `toggle ${d.toggle}` : 'no switch';
     case 'action': return d.action || 'action';
     case 'raw': return 'raw';
     case 'sequence': return `sequence (${(Array.isArray(d.steps) ? d.steps.length : 0)} steps)`;
@@ -1028,7 +1060,8 @@ class IrRemoteCardEditor extends HTMLElement {
             + this._cmd(`adjust.${i}.down`, 'Down (−)') + this._cmd(`adjust.${i}.up`, 'Up (+)') + this._cmd(`adjust.${i}.reset`, 'Reset (optional)'));
       case 'buttons':
         return cols('buttons_columns') + this._listBlock(sec, 'buttons', 'Button', null,
-          (it, i) => this._itemForm('buttons', i) + this._cmd(`buttons.${i}.command`, 'Command'));
+          (it, i) => this._itemForm('buttons', i) + this._cmd(`buttons.${i}.command`, 'Command'))
+          + '<button class="add" data-add="buttons" data-kind="switch"><ha-icon icon="mdi:power-socket-uk"></ha-icon>Add switch / smart plug</button>';
       default: return '';
     }
   }
@@ -1268,6 +1301,7 @@ class IrRemoteCardEditor extends HTMLElement {
       const n = arr.length + 1;
       if (key === 'inputs') arr.push({ name: `Input ${n}`, icon: 'mdi:import', command: blank() });
       else if (key === 'adjust') arr.push({ name: n === 1 ? 'Bass' : n === 2 ? 'Treble' : `Control ${n}`, icon: n === 2 ? 'mdi:music-clef-treble' : 'mdi:speaker', down: blank(), up: blank() });
+      else if (b.dataset.kind === 'switch') arr.push({ name: 'Amp plug', icon: 'mdi:power-socket-uk', command: { toggle: '' } });
       else arr.push({ name: `Button ${n}`, icon: 'mdi:remote', command: blank() });
       this._open.add(`${key}.${arr.length - 1}`);
       this._emit();
@@ -1328,6 +1362,7 @@ const EDITOR_STYLE = `
 .add { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-weight: 500;
   color: var(--primary-color, #03a9f4); background: transparent; border: 1px dashed currentColor; border-radius: 10px; padding: 6px 12px; cursor: pointer; }
 .add ha-icon { --mdc-icon-size: 18px; }
+.add + .add { margin-top: -4px; }
 .cmd { border-left: 3px solid color-mix(in srgb, var(--primary-color, #03a9f4) 45%, transparent);
   padding: 4px 0 4px 10px; display: flex; flex-direction: column; gap: 6px; }
 .chead { display: flex; align-items: center; gap: 8px; }

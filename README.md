@@ -2,7 +2,7 @@
 
 A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifier. It sends commands through an **ESPHome** or **Tasmota** IR blaster, a **text entity** that transmits whatever code is written to it, or through any HA action, script or button entity. It is styled to match the TrueNAS / Proxmox VE cards: a badge header with a status dot, a status pill and tinted, collapsible panels.
 
-- **Power button in the header** (compact; or a full Power section if you prefer), **Volume** (hold to repeat), **Mute**, **Inputs**, **Tone** (bass/treble style −/+ rows) and **Extras**
+- **Power button in the header** (compact; or a full Power section if you prefer), **Volume** (hold to repeat), **Mute**, **Inputs**, **Tone** (bass/treble style −/+ rows) and **Extras** (IR buttons, plus switches such as a smart plug, showing their on/off state)
 - Remembers the current input, power and mute state (IR is one-way, so these are *assumed* unless you give it real entities)
 - Optional real state: a smart-plug power sensor for on/off, an `input_select` for the input, a number/sensor for a volume bar
 - Macros: a list of commands with optional delays (e.g. power on → wait → select TV)
@@ -20,7 +20,7 @@ A Home Assistant Lovelace card for IR-controlled kit, built for a stereo amplifi
 **Manual:**
 
 1. Copy `ir-remote-card.js` to `/config/www/ir-remote-card.js`.
-2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.3.0`, type *JavaScript module*.
+2. **Settings → Dashboards → ⋮ → Resources → Add**: `/local/ir-remote-card.js?v=1.4.0`, type *JavaScript module*.
 3. Bump `?v=` after every update. HA caches hard.
 
 ## Visual editor
@@ -34,6 +34,7 @@ Add the card from the dashboard card picker and everything can be set in the edi
   - **IR code**: ESPHome address and command, Tasmota protocol, bits and data, or for a text entity simply the code text
   - **Raw IR timings**: microseconds, + for on and − for off (ESPHome needs a raw send action, see below)
   - **Button / script / scene**
+  - **Switch / smart plug (toggle)**: toggles any `switch`, `input_boolean`, `light` or `fan`. In Extras the tile shows On / Off and lights up when on. The **Add switch / smart plug** button adds one ready to fill in.
   - **Home Assistant action**: any action with YAML data, e.g. `esphome.ir_blaster_send_pronto`
   - **Sequence (macro)**: a YAML list of commands with `{delay: ms}` steps
   - **Not used**: hides the button
@@ -87,6 +88,20 @@ HA then has `esphome.ir_blaster_send_nec` (and `esphome.ir_blaster_send_raw`) (n
 **Learning codes:** open the device logs in ESPHome, point the amp's remote at the receiver and press each key. You'll see lines like `Received NEC: address=0x7A85, command=0x1A`. Those two numbers go into the card.
 
 Other protocols (RC5, Sony, Samsung, raw…) work the same way. Add another action, e.g. `send_rc5` with `transmit_rc5`, and either set it as the transport `service` or override it per command with `service_override: esphome.ir_blaster_send_rc5`.
+
+## Switches in Extras
+
+Extras can hold switches as well as IR buttons, e.g. the smart plug that powers the amp or a subwoofer:
+
+```yaml
+buttons:
+  - name: Amp plug
+    icon: mdi:power-socket-uk
+    command: { toggle: switch.amp_plug }
+  - { name: Loudness, icon: mdi:equalizer, command: "your loudness code" }
+```
+
+The tile shows the switch's real state (On / Off / Unavailable) and is highlighted green while it's on. If the plug has power monitoring, you can also set it as the `power_entity`, so the header power button shows whether the amp is really on.
 
 ## Power button
 
@@ -200,6 +215,7 @@ Anywhere a command is expected you can use:
 | `{ address: 0x.., command: 0x.. }` (ESPHome) | `transport.service` with those fields; `"0x.."` strings become numbers |
 | `{ protocol, bits, data }` / `{ raw }` (Tasmota) | `mqtt.publish` to `cmnd/<topic>/IRSend` |
 | `button.amp_dimmer` / `input_button.x` | `button.press` |
+| `{ toggle: switch.amp_plug }` | `switch.toggle` (or `input_boolean` / `light` / `fan`, else `homeassistant.toggle`) |
 | `script.amp_on` / `scene.x` | `turn_on` |
 | `{ action: domain.service, data: {…} }` | any HA action |
 | `{ code: "…" }` or a plain string (text entity) | `text.set_value` on `transport.entity` |
